@@ -23,4 +23,10 @@ Al finalizar la configuración se da inicio a la sesión, tras lo cual el slider
 paso el carro se mueve en el sentifo de "home" hasta presionar un swith de fin de carrera, luego de lo cual inicia la 
 sesión configurada.
 
+## Diagrama de configuración en Modo Foto
+
 ![alt text](https://github.com/juanic/plantilla/blob/master/dia_1.png)
+
+## Diagrama de configuración en Modo Video
+
+![alt text](https://github.com/juanic/plantilla/blob/master/dia_2.png)
