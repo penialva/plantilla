@@ -54,6 +54,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include "gpio.h"
 #include "led.h"
 #include "switch.h"
 #include "task.h"
@@ -61,21 +62,23 @@
 #include "semphr.h"
 #include "ili9341.h"
 #include "f_stepper.h"
+#include "timer.h"
 
 /* === Definiciones y Macros =============================================== */
 
+#define EVENTO_COMPLETO   (1 << 0)
+
 #define SPI_1 1			/*!< EDU-CIAA SPI port */
-#define GPIO_4 4		/*!< EDU-CIAA GPIO0 port */
-#define GPIO_1 1		/*!< EDU-CIAA GPIO1 port */
-#define GPIO_2 2		/*!< EDU-CIAA GPIO2 port */
-#define GPIO_3 3		/*!< EDU-CIAA GPIO3 port */
 
 #define FOTO 0			/*!< Modo fotografía (Time-Lapse) */
 #define VIDEO 1			/*!< Modo Video */
 #define ACTIVADO 1		/*!< Estado activado */
 #define DESACTIVADO 0	/*!< Estado desactivado */
 
-#define VEL_STEP 1		/*!< Velocidad de paso (pasos por ms) */
+#define TPO_OBT 200		/*!< Tpo (en ms) de obturación */
+#define AVANCE 1		/*!< Dirección de motor para avance de carro */
+#define RETROCESO 0		/*!< Dirección de motor para retroceso de carro */
+#define MAX_VEL 6000	/*!< Velocidad máxima en pasos por segundo */
 #define SPMM 160		/*!< Pasos por mm
 						* srev*fm       200*32
 						* ------- = d = ------
@@ -158,6 +161,22 @@ void Foto(void * parametros);
  */
 void Video(void * parametros);
 
+/** @brief Función que comanda el movimiento del carro
+ **
+ **	@param[in]	stp Cantidad de pasos del motor a realizar
+ **	@param[in]	tpo Tiempo total (en us) en que se deben realizar la cantidad de pasos
+ **	@param[in]	dir Sentido de movivimiento (avance o retroceso)
+ ** @return		NONE
+ */
+void MoverCarro(uint32_t stp, uint32_t tpo, uint8_t dir);
+
+/** @brief Función que comanda la realización de los pasos del motor
+ **
+ ** Función que se ejecuta en la interrupción del Timer0 y en cada invocación
+ ** comanda la realización de un paso del motor.
+ */
+void Pasos(void);
+
 /* === Definiciones de variables internas ================================== */
 
 /** @brief Menú de configuración
@@ -165,9 +184,9 @@ void Video(void * parametros);
  */
 menu_t menu[]={
 	{ FOTO, FOTO, VIDEO, "Modo     "},
-	{ 10, 1, 250, "Tiempo   "},						/** < Tiempo en segundos */
-	{ 8, 1, 100, "Fotos    "},						/** < Cantidad de Fotos */
-	{ 20, 1, 100, "Distancia"},						/** < Distancia en cm */
+	{ 200, 1, 250, "Tiempo   "},					/** < Tiempo en segundos */
+	{ 40, 1, 100, "Fotos    "},						/** < Cantidad de Fotos */
+	{ 80, 1, 85, "Distancia"},						/** < Distancia en cm */
 	{ DESACTIVADO, DESACTIVADO, ACTIVADO, "INICIO"}
 };
 
@@ -183,46 +202,71 @@ sesion_t s = {
 	0
 };
 
-/** @brief Configuración de pines para control de motor
+/** @brief Configuración de pines para control de motor (GPIO0)
  *
  */
 stepper_port_config step_0 = {
-		STEPPER_0_STEP_MUX_GROUP,
-		STEPPER_0_STEP_MUX_PIN,
-		STEPPER_0_STEP_GPIO_PORT,
-		STEPPER_0_STEP_GPIO_PIN,
-		STEPPER_0_STEP_FUNC
+	STEPPER_0_STEP_MUX_GROUP,
+	STEPPER_0_STEP_MUX_PIN,
+	STEPPER_0_STEP_GPIO_PORT,
+	STEPPER_0_STEP_GPIO_PIN,
+	STEPPER_0_STEP_FUNC
 };
 
-/** @brief Configuración de pines para control de motor
+/** @brief Configuración de pines para control de motor (GPIO1)
  *
  */
 stepper_port_config dir_0 = {
-		STEPPER_0_DIR_MUX_GROUP,
-		STEPPER_0_DIR_MUX_PIN,
-		STEPPER_0_DIR_GPIO_PORT,
-		STEPPER_0_DIR_GPIO_PIN,
-		STEPPER_0_DIR_FUNC
+	STEPPER_0_DIR_MUX_GROUP,
+	STEPPER_0_DIR_MUX_PIN,
+	STEPPER_0_DIR_GPIO_PORT,
+	STEPPER_0_DIR_GPIO_PIN,
+	STEPPER_0_DIR_FUNC
 };
 
 /** @brief Declaración de motor
  *
  */
 stepper motor = {
-		0,
-		0,
-		0,
-		0,
-		0,
-		&step_0,
-		&dir_0,
-		NULL,
-		NULL,
-		NULL,
-		NULL
+	DEFAULT_SPEED,
+	0,
+	AVANCE,
+	OI32_STEP,
+	SLEEPING,
+	&step_0,
+	&dir_0,
+	NULL,
+	NULL,
+	NULL,
+	NULL
 };
 
-uint16_t fotos_tomadas, distancia_recorrida;
+/** @brief Declaración de timer
+ *
+ */
+timer_config temporizador = {
+	TIMER_C,
+	0,
+	Pasos
+};
+
+/** @brief Declaración de GPIO para fin de carrera y obturador
+ *
+ */
+gpioConf_t fin_de_carrera = {
+		GPIO_5,
+		INPUT,
+		PULLUP
+};
+gpioConf_t obturador = {
+		GPIO_6,
+		OUTPUT,
+		NONE_RES
+};
+
+uint8_t origen = FALSE;
+uint8_t fotos_tomadas;
+uint32_t pasos, pasos_realizados;
 
 /** @brief Descriptor de las tareas de Teclado, Foto y Video */
 TaskHandle_t xFotoHandle;
@@ -231,9 +275,6 @@ TaskHandle_t xTecladoHandle;
 
 /** @brief Descriptor del grupo de eventos */
 EventGroupHandle_t eventos;
-
-/** @brief Descriptor del grupo de semaforos */
-SemaphoreHandle_t xMutex;
 
 /* === Definiciones de variables externas ================================== */
 
@@ -260,13 +301,14 @@ void Pantalla(void * parametros) {
 			SCREEN_MARG + 10 + 2 * font_11x18.FontHeight + 3 * MENU_DIST_Y,
 			ILI9341_LIGHTGREY);
 	for (i = 0; i < sizeof(menu) / sizeof(menu_t); i++) {
-		ILI9341DrawLine(MENU_MARG_X,
-				MENU_MARG_Y + (2 * i + 2) * MENU_DIST_Y
-				+ (i + 1) * font_11x18.FontHeight,
-				ILI9341_WIDTH - MENU_MARG_X,
-				MENU_MARG_Y + (2 * i + 2) * MENU_DIST_Y
-				+ (i + 1) * font_11x18.FontHeight, ILI9341_LIGHTGREY);
+			ILI9341DrawLine(MENU_MARG_X,
+					MENU_MARG_Y + (2 * i + 2) * MENU_DIST_Y
+					+ (i + 1) * font_11x18.FontHeight,
+					ILI9341_WIDTH - MENU_MARG_X,
+					MENU_MARG_Y + (2 * i + 2) * MENU_DIST_Y
+					+ (i + 1) * font_11x18.FontHeight, ILI9341_LIGHTGREY);
 	}
+
 	while (1) {
 		if (s.estado == DESACTIVADO) {
 			/* Actualizar Menú */
@@ -338,26 +380,58 @@ void Pantalla(void * parametros) {
 					ILI9341_WIDTH - MENU_MARG_X,
 					MENU_MARG_Y + (2 * 6 + 2) * MENU_DIST_Y
 							+ 7 * font_11x18.FontHeight, ILI9341_LIGHTGREY);
-			ILI9341DrawFilledRectangle(MENU_MARG_X + MENU_DIST_Y,
-					MENU_MARG_Y + (2 * 6 + 1) * MENU_DIST_Y
-					+ 6 * font_11x18.FontHeight,
-					MENU_MARG_X + MENU_DIST_Y
-					+ ((ILI9341_WIDTH - 2 * MENU_MARG_X
-					- 2 * MENU_DIST_Y) * distancia_recorrida) / s.distancia,
-					MENU_MARG_Y + (2 * 6 + 1) * MENU_DIST_Y
-					+ 7 * font_11x18.FontHeight, ILI9341_BLUE2);
 			/* Origen */
-			ILI9341DrawString(MENU_MARG_X,
-					MENU_MARG_Y + (2 * 6 + 2) * MENU_DIST_Y
-					+ 8 * font_11x18.FontHeight, "Retorno origen...",
-					&font_11x18, ILI9341_BLACK, ILI9341_DARKGREY);
-			/* Info */
-			/*
-			ILI9341DrawString(MENU_MARG_X,
-					MENU_MARG_Y + (2 * 6 + 2) * MENU_DIST_Y
-					+ 8 * font_11x18.FontHeight, "Distancia: ",
-					&font_11x18, ILI9341_BLACK, ILI9341_DARKGREY);
-					*/
+			if (origen){
+				ILI9341DrawString(MENU_MARG_X,
+						MENU_MARG_Y + (2 * 6 + 2) * MENU_DIST_Y
+						+ 8 * font_11x18.FontHeight, "Retorno origen...",
+						&font_11x18, ILI9341_BLACK, ILI9341_DARKGREY);
+			} else {
+				/* Progress bar */
+				if(s.modo == FOTO){
+					ILI9341DrawFilledRectangle(MENU_MARG_X + MENU_DIST_Y,
+							MENU_MARG_Y + (2 * 6 + 1) * MENU_DIST_Y
+							+ 6 * font_11x18.FontHeight,
+							MENU_MARG_X + MENU_DIST_Y
+							+ ((ILI9341_WIDTH - 2 * MENU_MARG_X
+							- 2 * MENU_DIST_Y) * pasos_realizados) / (pasos * s.fotos),
+							MENU_MARG_Y + (2 * 6 + 1) * MENU_DIST_Y
+							+ 7 * font_11x18.FontHeight, ILI9341_BLUE2);
+
+				} else{
+					ILI9341DrawFilledRectangle(MENU_MARG_X + MENU_DIST_Y,
+							MENU_MARG_Y + (2 * 6 + 1) * MENU_DIST_Y
+							+ 6 * font_11x18.FontHeight,
+							MENU_MARG_X + MENU_DIST_Y
+							+ ((ILI9341_WIDTH - 2 * MENU_MARG_X
+							- 2 * MENU_DIST_Y) * pasos_realizados) / pasos,
+							MENU_MARG_Y + (2 * 6 + 1) * MENU_DIST_Y
+							+ 7 * font_11x18.FontHeight, ILI9341_BLUE2);
+				}
+				/* Info */
+				ILI9341DrawString(MENU_MARG_X,
+						MENU_MARG_Y + (2 * 6 + 2) * MENU_DIST_Y
+						+ 8 * font_11x18.FontHeight, "Distancia: ",
+						&font_11x18, ILI9341_BLACK, ILI9341_DARKGREY);
+				ILI9341DrawInt(MENU_MARG_X + 11 * font_11x18.FontWidth,
+						MENU_MARG_Y + (2 * 6 + 2) * MENU_DIST_Y
+						+ 8 * font_11x18.FontHeight, pasos_realizados / (10 * SPMM), 3,
+						&font_11x18, ILI9341_BLACK, ILI9341_DARKGREY);
+				ILI9341DrawString(MENU_MARG_X + 14 * font_11x18.FontWidth,
+						MENU_MARG_Y + (2 * 6 + 2) * MENU_DIST_Y
+						+ 8 * font_11x18.FontHeight, "cm",
+						&font_11x18, ILI9341_BLACK, ILI9341_DARKGREY);
+				if(s.modo == FOTO){
+					ILI9341DrawString(MENU_MARG_X,
+							MENU_MARG_Y + (2 * 7 + 2) * MENU_DIST_Y
+							+ 9 * font_11x18.FontHeight, "Fotos: ",
+							&font_11x18, ILI9341_BLACK, ILI9341_DARKGREY);
+					ILI9341DrawInt(MENU_MARG_X + 7 * font_11x18.FontWidth,
+							MENU_MARG_Y + (2 * 7 + 2) * MENU_DIST_Y
+							+ 9 * font_11x18.FontHeight, fotos_tomadas, 3,
+							&font_11x18, ILI9341_BLACK, ILI9341_DARKGREY);
+				}
+			}
 		}
 		vTaskDelay(200 / portTICK_PERIOD_MS);
 	}
@@ -394,9 +468,9 @@ void Teclado(void * parametros) {
          }
          anterior = tecla;
       }
-      s.distancia = menu[3].value * 10;
+      s.distancia = menu[3].value * 10;	// para pasar a mm
       s.fotos = menu[2].value;
-      s.tiempo = menu[1].value * 1000;
+      s.tiempo = menu[1].value * 1000; // para pasar a ms
       s.modo = menu[0].value;
       s.estado = menu[4].value;
       if((s.modo == FOTO) && (s.estado == ACTIVADO) ){
@@ -413,36 +487,87 @@ void Teclado(void * parametros) {
 }
 
 void Foto(void * parametros) {
-	int32_t pasos_totales, pasos_parciales, tiempo_parcial;
+	uint8_t i;
+	static int32_t pasos_totales, pasos_parciales, tiempo_espera;
+
 	while (1) {
 		vTaskSuspend(xFotoHandle);
 		fotos_tomadas = 0;
-		distancia_recorrida = 0;
-		pasos_totales = s.distancia * SPMM; 		// Cantidad de pasos totales
-		pasos_parciales = pasos_totales / s.fotos; 	// Cantida de pasos parciales por foto
-		tiempo_parcial = s.tiempo / s.fotos;	// - pasos_parciales * VEL_STEP; // tiempo parcial de espera entre fotos
-		while (distancia_recorrida < s.distancia) {
-			while (pasos_parciales--) {
-				StepperStepToggle(&motor); //paso
-				Led_Toggle(YELLOW_LED);
-				vTaskDelay(VEL_STEP / portTICK_PERIOD_MS); // velocidad de paso
-			}
-			//xSemaphoreTake( xMutex, portMAX_DELAY );
-			//ComandoIR();
-			distancia_recorrida += s.distancia / s.fotos;
-			pasos_parciales = pasos_totales / s.fotos;
-			//xSemaphoreGive( xMutex );
-			vTaskDelay(tiempo_parcial / portTICK_PERIOD_MS); // Espera entre fotos
+		pasos_totales = s.distancia * SPMM; 			// Cantidad de pasos totales
+		pasos_parciales = pasos_totales / s.fotos; 		// Cantidad de pasos parciales por foto
+		tiempo_espera = s.tiempo / s.fotos - 1000 * (pasos_parciales / MAX_VEL) - TPO_OBT;	// Tiempo espera entre movimientos en ms
+		/* Retorno a Origen */
+		origen = TRUE;
+		while(GPIORead(fin_de_carrera.pin)){
+			/* retrocede el carro 5mm a la velocidad máxima y vuelve a preguntar si llegó al origen */
+			MoverCarro(5 * SPMM, 1000000 / MAX_VEL, RETROCESO);
+			xEventGroupWaitBits(eventos, EVENTO_COMPLETO, TRUE, FALSE, portMAX_DELAY);
 		}
-		distancia_recorrida = s.distancia;
+		origen = FALSE;
+		pasos_realizados = 0;
+		/* Movimiento Programado */
+		for (i = 0; i < s.fotos; i++){
+			MoverCarro(pasos_parciales, 1000000 / MAX_VEL, AVANCE);
+			xEventGroupWaitBits(eventos, EVENTO_COMPLETO, TRUE, FALSE, portMAX_DELAY);
+			/* Tomar foto */
+			vTaskDelay(tiempo_espera / portTICK_PERIOD_MS);	// espera entre movimientos
+			GPIOSetLow(obturador.pin);
+			vTaskDelay(TPO_OBT / portTICK_PERIOD_MS); 	// retardo para el obturador
+			GPIOSetHigh(obturador.pin);
+			fotos_tomadas++;
+		}
 		menu[4].value = DESACTIVADO;
 		vTaskResume(xTecladoHandle);
 	}
 }
 
 void Video(void * parametros) {
-	while(1) {
+	static uint32_t pasos_totales;
 
+	while(1) {
+		vTaskSuspend(xVideoHandle);
+		pasos_totales = s.distancia * SPMM; 		// Cantidad de pasos totales
+		/* Retorno a Origen */
+		origen = TRUE;
+		while(GPIORead(fin_de_carrera.pin)){
+			/* retrocede el carro 5mm a la velocidad máxima y vuelve a preguntar si llegó al origen */
+			MoverCarro(5 * SPMM, 1000000 / MAX_SPS, RETROCESO);
+			xEventGroupWaitBits(eventos, EVENTO_COMPLETO, TRUE, FALSE, portMAX_DELAY);
+		}
+		origen = FALSE;
+		pasos_realizados = 0;
+		/* Movimiento Programado */
+		MoverCarro(pasos_totales, s.tiempo * 1000 / pasos_totales, AVANCE);
+		xEventGroupWaitBits(eventos, EVENTO_COMPLETO, TRUE, FALSE, portMAX_DELAY);
+		menu[4].value = DESACTIVADO;
+		vTaskResume(xTecladoHandle);
+	}
+}
+
+void MoverCarro(uint32_t stp, uint32_t tpo_stp, uint8_t dir){
+	StepperSetDir(&motor, dir);
+	temporizador.period = tpo_stp; // tiempo en us entre pasos
+	pasos = stp;
+	TimerInit(&temporizador);
+	TimerStart(temporizador.timer);
+}
+
+void Pasos(void){
+	static uint32_t i = 0;
+	if (i < pasos){
+		StepperStepUp(&motor);
+		//StepperStepToggle(&motor);
+		Led_Toggle(YELLOW_LED);
+		TimerStart(temporizador.timer);
+		i++;
+		pasos_realizados++;
+		StepperStepDown(&motor);
+	} else {
+		i = 0;
+		TimerStop(temporizador.timer);
+		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+		xEventGroupSetBitsFromISR(eventos, EVENTO_COMPLETO, &xHigherPriorityTaskWoken );
+		portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
 	}
 }
 /* === Definiciones de funciones externas ================================== */
@@ -461,11 +586,13 @@ int main(void) {
    Init_Switches();
    ILI9341Init(SPI_1, GPIO_4, GPIO_2, GPIO_3);
    ILI9341Rotate(ILI9341_Portrait_2);
-   StepperAdd(&motor);
+   StepperInit(&motor);
+   GPIOInit(fin_de_carrera);
+   GPIOInit(obturador);
+   GPIOSetHigh(obturador.pin);	// Obturador inicia en alto
 
    /* Creación del grupo de eventos */
    eventos = xEventGroupCreate();
-   xMutex = xSemaphoreCreateMutex();
 
    /* Creación de las tareas */
 	if (eventos != NULL) {
