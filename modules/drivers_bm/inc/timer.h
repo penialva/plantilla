@@ -63,21 +63,27 @@
 
 
 /*==================[macros]=================================================*/
-#define lpc4337            1
-#define mk60fx512vlq15     2
+
+#define TIMER_A 			0 				/*SysTick timer (CORTEX-M)*/
+#define TIMER_B 			1 				/*RTI Timer (NXP)*/
+#define TIMER_C 			2 				/*Timer0 (NXP)*/
 
 /*==================[typedef]================================================*/
-
+typedef struct {				/*!< Timer Struct*/
+		uint8_t timer;			/*!< Timer Selected*/
+		uint16_t period;		/*!< Period*/
+		void *pFunc;			/*!< Function pointer to app repetitive function*/
+} timer_config;
 /*==================[external data declaration]==============================*/
 
 /*==================[external functions declaration]=========================*/
 
-void timerInit();
+void TimerInit(timer_config *timer_ini);
+void TimerStart(uint8_t timer);
+void TimerStop(uint8_t timer);
+void TimerReset(uint8_t timer);
 
-
-/** @} doxygen end group definition */
-/** @} doxygen end group definition */
-/** @} doxygen end group definition */
 /*==================[end of file]============================================*/
-#endif /* #ifndef MI_NUEVO_PROYECTO_H */
+#endif /* #ifndef TIMER_H */
 
+/** @}*/

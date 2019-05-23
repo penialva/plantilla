@@ -59,42 +59,141 @@
 
 /*==================[inclusions]=============================================*/
 
-#ifndef CPU
-#error CPU shall be defined
-#endif
-#if (lpc4337 == CPU)
 #include "chip.h"
-#elif (mk60fx512vlq15 == CPU)
-#else
-#endif
 #include "timer.h"
 
 
 /*==================[macros and definitions]=================================*/
-
-
-
+#define TIMER_A_10ms_TICK 	100
+#define TIMER_B_10ms_TICK 	10
 
 /*==================[internal data declaration]==============================*/
+uint32_t tick_timer_a = 0;
+uint32_t tick_timer_b = 0;
 
-void (*pIsrTimer)();
+timer_config *timer_a, *timer_b, *timer_c;
+
+void (*pIsrTimerA)();
+void (*pIsrTimerB)();
+void (*pIsrTimerC)();
 /*==================[internal functions declaration]=========================*/
 
 /*==================[internal data definition]===============================*/
+void TimerInit(timer_config *timer_ini)
+{
+	switch(timer_ini->timer)
+	{
+	 	case TIMER_A:
+	 		SystemCoreClockUpdate ();
+	 		SysTick_Config(SystemCoreClock/TIMER_A_10ms_TICK);
+	 		SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_ENABLE_Msk; /*Stop Timer*/
+	 		timer_a = timer_ini;
+	 		pIsrTimerA=timer_ini->pFunc;
+	 	break;
 
-void timerInit(uint32_t time_ms,void *pfunc){
+	 	case TIMER_B:
+	 		Chip_RIT_Init(LPC_RITIMER);
+	 		Chip_RIT_SetTimerInterval(LPC_RITIMER,TIMER_B_10ms_TICK);
+	 		timer_b = timer_ini;
+	 		pIsrTimerB=timer_ini->pFunc;
+	 	break;
 
-	pIsrTimer=pfunc;
-	Chip_RIT_Init(LPC_RITIMER);
-	Chip_RIT_SetTimerInterval(LPC_RITIMER,time_ms);
-	NVIC_EnableIRQ(RITIMER_IRQn);
+	 	case TIMER_C:
+	 		Chip_TIMER_Init(LPC_TIMER0);
+	 		Chip_TIMER_PrescaleSet(LPC_TIMER0, 0);
+	 		Chip_TIMER_SetMatch(LPC_TIMER0, 0, timer_ini->period * ((SystemCoreClock) / 1000000 - 1));
+	 		Chip_TIMER_ResetOnMatchDisable(LPC_TIMER0, 0);
+	 		Chip_TIMER_StopOnMatchEnable(LPC_TIMER0, 0);
+	 		LPC_TIMER0->IR = 0xff;		/*!< Clear all interrupt */
+	 		timer_c = timer_ini;
+	 		pIsrTimerC = timer_ini->pFunc;
+	 	break;
+	}
 }
+/*
+void SysTick_Handler(void)
+{
+	uint16_t period = timer_a->period/10;
+	tick_timer_a ++;
+	if ( tick_timer_a == period)
+	{
+		TimerReset(TIMER_A);
+		pIsrTimerA();
+	}
+}
+*/
 
-void ISR_RIT(){
-
+void RIT_IRQHandler(void)
+{
+	uint16_t period = timer_b->period/10; /*calc period in cents*/
+	tick_timer_b ++;
+	if ( tick_timer_b == period)
+	{
+		TimerReset(TIMER_B);
+		pIsrTimerB();   /* Call app function */
+	}
 	Chip_RIT_ClearInt(LPC_RITIMER);
-	pIsrTimer();
 }
+
+void TIMER0_IRQHandler(void){
+	pIsrTimerC();
+	Chip_TIMER_ClearMatch(LPC_TIMER0, 0);
+}
+
+void TimerStart(uint8_t timer)
+{
+
+	switch(timer)
+	{
+	 	case TIMER_A:
+	 		SysTick->CTRL  = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_TICKINT_Msk  | SysTick_CTRL_ENABLE_Msk;
+	 	break;
+	 	case TIMER_B:
+	 		NVIC_EnableIRQ(RITIMER_IRQn);
+	 	break;
+	 	case TIMER_C:
+	 		NVIC_SetPriority(TIMER0_IRQn, 5);
+	 		NVIC_EnableIRQ(TIMER0_IRQn);
+			NVIC_ClearPendingIRQ(TIMER0_IRQn);
+	 		Chip_TIMER_MatchEnableInt(LPC_TIMER0, 0);
+	 		Chip_TIMER_Reset(LPC_TIMER0);
+	 		Chip_TIMER_Enable(LPC_TIMER0);
+	 	break;
+	}
+}
+
+void TimerStop(uint8_t timer)
+{
+	switch(timer)
+	{
+	 	case TIMER_A:
+	 		SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk | SysTick_CTRL_ENABLE_Msk;
+	 	break;
+	 	case TIMER_B:
+	 		NVIC_DisableIRQ(RITIMER_IRQn);
+	 	break;
+	 	case TIMER_C:
+	 		Chip_TIMER_MatchDisableInt(LPC_TIMER0, 0);
+	 		Chip_TIMER_Disable(LPC_TIMER0);
+	 	break;
+	}
+}
+
+void TimerReset(uint8_t timer)
+{
+	switch(timer)
+	{
+	 	case TIMER_A:
+	 		tick_timer_a = 0;
+	 	break;
+	 	case TIMER_B:
+	 		tick_timer_b = 0;
+	 	break;
+	}
+}
+
+
+
 
 /*==================[external data definition]===============================*/
 
