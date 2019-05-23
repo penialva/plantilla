@@ -97,7 +97,7 @@
 
 /* The lowest interrupt priority that can be used in a call to a "set priority"
  * function. */
-#define configLIBRARY_LOWEST_INTERRUPT_PRIORITY         0x1f
+#define configLIBRARY_LOWEST_INTERRUPT_PRIORITY         0x7
 
 /* The highest interrupt priority that can be used by any interrupt service
  * routine that makes calls to interrupt safe FreeRTOS API functions.  DO NOT CALL
