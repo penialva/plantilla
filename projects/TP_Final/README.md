@@ -23,3 +23,4 @@ Al finalizar la configuración se da inicio a la sesión, tras lo cual el slider
 paso el carro se mueve en el sentifo de "home" hasta presionar un swith de fin de carrera, luego de lo cual inicia la 
 sesión configurada.
 
+![alt text](https://raw.githubusercontent.com/juanic/plantilla/blob/master/dia_1.png)
