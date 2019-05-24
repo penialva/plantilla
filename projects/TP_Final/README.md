@@ -29,7 +29,15 @@ sesión configurada.
 ![alt text](https://github.com/juanic/plantilla/blob/master/dia_2.png)
 
 
-## Video
+## Videos demostrativos
 https://youtu.be/SDs7J-F429k
 https://youtu.be/oxqPVLT6klE
 https://drive.google.com/file/d/1--Ih3DCaDqLaV8Ka5u5lhqJuJlxRRIpR/view?usp=sharing
+
+## Time-lapse
+https://youtu.be/ESD5Wg6Tirk
+
+## Backstage del time-lapse
+https://drive.google.com/file/d/1-0l4XrU7XVb9XXkLCgqXGiK82HfRDBn_/view?usp=sharing
+https://drive.google.com/file/d/1--wwBv05AdXQ_tr5hYrj2w9tjY-rjzaw/view?usp=sharing
+
