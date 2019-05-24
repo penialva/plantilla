@@ -1,10 +1,7 @@
-# Trabajo práctico final 
+# Sistemas Operativos de Tiempo Real - Trabajo práctico final 
 
-Este repositorio contiene los archivos necesarios para compilar proyectos en lenguaje C que se ejecuten en una placa CIAA. Es una versión simplifciada del firmware original, pensada para se utilizada en ambientes educativos.
+Curso de posgrado pensado para la Especialización en Sistemas Embebidos y la Maestría en Ingeniería Biomédica
 
-## IMPORTANTE
-
-**Este entorno esta en construccion!!!**
 
 ## Drivers utilizados
 
