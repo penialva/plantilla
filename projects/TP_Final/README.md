@@ -27,3 +27,7 @@ sesión configurada.
 ## Diagrama de configuración en Modo Video
 
 ![alt text](https://github.com/juanic/plantilla/blob/master/dia_2.png)
+
+
+## Video
+https://youtu.be/LG8GhNi9DM8
